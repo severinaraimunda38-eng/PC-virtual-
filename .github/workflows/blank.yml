@@ -1,0 +1,98 @@
+name: PC Virtual Completo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  pc-virtual:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+
+    steps:
+      - name: Atualizar sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get upgrade -y
+
+      - name: Instalar ambiente gráfico
+        run: |
+          sudo apt-get install -y \
+            xfce4 \
+            xfce4-goodies \
+            dbus-x11 \
+            tigervnc-standalone-server \
+            tigervnc-common \
+            curl \
+            jq
+
+      - name: Configurar senha do PC
+        env:
+          VNC_PASSWORD: ${{ secrets.VNC_PASSWORD }}
+        run: |
+          if [ -z "$VNC_PASSWORD" ]; then
+            echo "Configure o segredo VNC_PASSWORD"
+            exit 1
+          fi
+
+          mkdir -p ~/.vnc
+          printf '%s\n' "$VNC_PASSWORD" | vncpasswd -f > ~/.vnc/passwd
+          chmod 600 ~/.vnc/passwd
+
+      - name: Configurar área de trabalho
+        run: |
+          mkdir -p ~/.vnc
+
+          cat > ~/.vnc/xstartup <<'EOF'
+          #!/bin/sh
+          unset SESSION_MANAGER
+          unset DBUS_SESSION_BUS_ADDRESS
+          exec dbus-launch --exit-with-session startxfce4
+          EOF
+
+          chmod +x ~/.vnc/xstartup
+
+      - name: Iniciar servidor VNC
+        run: |
+          tigervncserver :1 \
+            -geometry 1280x720 \
+            -depth 24 \
+            -localhost no
+
+          sleep 5
+
+      - name: Instalar Ngrok
+        run: |
+          curl -sSL https://ngrok-agent.s3.amazonaws.com/ngrok.asc \
+            | sudo tee /etc/apt/trusted.gpg.d/ngrok.asc >/dev/null
+
+          echo "deb https://ngrok-agent.s3.amazonaws.com buster main" \
+            | sudo tee /etc/apt/sources.list.d/ngrok.list
+
+          sudo apt-get update
+          sudo apt-get install -y ngrok
+
+      - name: Conectar ao Ngrok
+        env:
+          NGROK_AUTHTOKEN: ${{ secrets.NGROK_AUTHTOKEN }}
+        run: |
+          if [ -z "$NGROK_AUTHTOKEN" ]; then
+            echo "Configure o segredo NGROK_AUTHTOKEN"
+            exit 1
+          fi
+
+          ngrok config add-authtoken "$NGROK_AUTHTOKEN"
+
+          nohup ngrok tcp 5901 --log=stdout > ngrok.log 2>&1 &
+
+          sleep 10
+
+          echo "===== ENDEREÇO DO PC VIRTUAL ====="
+          curl -s http://127.0.0.1:4040/api/tunnels \
+            | jq -r '.tunnels[] | select(.proto=="tcp") | .public_url'
+
+      - name: Manter PC Virtual ligado
+        run: |
+          echo "PC Virtual iniciado!"
+          while true; do
+            sleep 60
+          done
